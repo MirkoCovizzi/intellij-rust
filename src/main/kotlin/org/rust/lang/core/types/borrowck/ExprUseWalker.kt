@@ -22,11 +22,10 @@ import org.rust.lang.core.types.infer.Categorization.Local
 import org.rust.lang.core.types.infer.Cmt
 import org.rust.lang.core.types.infer.MemoryCategorizationContext
 import org.rust.lang.core.types.infer.MutabilityCategory
+import org.rust.lang.core.types.infer.substituteOrUnknown
 import org.rust.lang.core.types.regions.ReScope
 import org.rust.lang.core.types.regions.Scope
-import org.rust.lang.core.types.ty.TyAdt
-import org.rust.lang.core.types.ty.TyFunction
-import org.rust.lang.core.types.ty.isMovesByDefault
+import org.rust.lang.core.types.ty.*
 import org.rust.lang.core.types.type
 
 interface Delegate {
@@ -421,23 +420,29 @@ class ExprUseWalker(private val delegate: Delegate, private val mc: MemoryCatego
             }
         }
 
-        if (withExpr == null) return
-
-        val withCmt = mc.processExpr(withExpr)
-        val withType = withCmt.ty
-        if (withType is TyAdt) {
-            val structFields = (withType.item as? RsStructItem)?.namedFields.orEmpty()
-            for (field in structFields) {
-                val isMentioned = fields.any { it.identifier?.text == field.identifier.text }
-                if (!isMentioned) {
-                    val interior = Interior.Field(withCmt, field.name)
-                    val fieldCmt = Cmt(withExpr, interior, withCmt.mutabilityCategory.inherit(), withType)
-                    delegateConsume(withExpr, fieldCmt)
+        // With base expr, e.g. `S { x, ..s }`
+        if (withExpr != null) {
+            val withCmt = mc.processExpr(withExpr)
+            val withType = withCmt.ty
+            if (withType is TyAdt) {
+                val withFields = (withType.item as? RsStructItem)?.namedFields.orEmpty()
+                for (withField in withFields) {
+                    val isMentioned = fields.any { it.identifier?.text == withField.identifier.text }
+                    // Consume only needed (not mentioned before) fields of `withExpr`
+                    if (!isMentioned) {
+                        val withFieldType = when (val rawType = withField.typeReference?.type) {
+                            is TyTypeParameter -> rawType.substituteOrUnknown(withType.typeParameterValues)
+                            null -> TyUnknown
+                            else -> rawType
+                        }
+                        val interior = Interior.Field(withCmt, withField.name)
+                        val fieldCmt = Cmt(withExpr, interior, withCmt.mutabilityCategory.inherit(), withFieldType)
+                        delegateConsume(withExpr, fieldCmt)
+                    }
                 }
             }
+            walkExpr(withExpr)
         }
-
-        walkExpr(withExpr)
     }
 
     private fun armMoveMode(discriminantCmt: Cmt, arm: RsMatchArm): TrackMatchMode {
