@@ -32,6 +32,27 @@ val RsQualifiedNamedElement.qualifiedName: String?
         return "$cargoTarget$inCratePath"
     }
 
+fun RsQualifiedNamedElement.qualifiedNameRelativeTo(mod: RsMod): String? {
+    val crateRelativePath = crateRelativePath
+    if (mod.crateRoot != crateRoot || crateRelativePath == null) {
+        return qualifiedName
+    }
+
+    val modPathPrefix = mod.crateRelativePath?.let { "$it::" }
+    return if (containingMod.superMods.contains(mod)
+        && modPathPrefix != null
+        && crateRelativePath.startsWith(modPathPrefix)
+    ) {
+        var result = crateRelativePath.removePrefix(modPathPrefix)
+        if (cargoWorkspace?.packages?.any { result.startsWith("${it.normName}::") } == true) {
+            result = "self::$result"
+        }
+        result
+    } else {
+        "crate$crateRelativePath"
+    }
+}
+
 @Suppress("DataClassPrivateConstructor")
 data class RsQualifiedName private constructor(
     val crateName: String,
@@ -375,6 +396,7 @@ data class RsQualifiedName private constructor(
         CONSTANT,
         MACRO,
         PRIMITIVE,
+
         // Synthetic types - rustdoc uses different links for mods and crates items
         // It generates `crateName/index.html` and `path/modName/index.html` links for crates and modules respectively
         // instead of `path/type.Name.html`
