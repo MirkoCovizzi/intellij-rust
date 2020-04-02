@@ -117,5 +117,5 @@ object RsPsiImplUtil {
         LocalSearchScope(scope.findMacroCallExpandedFrom() ?: scope)
 }
 
-private fun RsMod.hasChildModules(): Boolean =
+fun RsMod.hasChildModules(): Boolean =
     expandedItemsExceptImplsAndUses.any { it is RsModDeclItem || it is RsModItem && it.hasChildModules() }
