@@ -10,42 +10,61 @@ import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import org.rust.cargo.project.model.cargoProjects
 import org.rust.lang.core.psi.*
-import org.rust.lang.core.psi.ext.descendantOfTypeStrict
+import org.rust.lang.core.psi.ext.*
 import org.rust.openapiext.toPsiFile
 
 class RsConsoleCodeFragmentContext {
 
-    private val topLevelElements: MutableMap<String, String> = mutableMapOf()
-    private val allCommandsText: StringBuilder = StringBuilder()
+    private val itemsNames: Set<String> = mutableSetOf()
+    private val commands: MutableList<String> = mutableListOf()
 
     fun addToContext(lastCommandContext: RsConsoleOneCommandContext) {
-        topLevelElements.putAll(lastCommandContext.topLevelElements)
-        allCommandsText.append(lastCommandContext.statementsText)
+        if (commands.isEmpty() || lastCommandContext.itemsNames.any(itemsNames::contains)) {
+            commands.add(lastCommandContext.command)
+        } else {
+            commands[commands.size - 1] = commands.last() + "\n" + lastCommandContext.command
+        }
     }
 
     fun updateContext(project: Project, codeFragment: RsReplCodeFragment) {
-        val allCommandsText = getAllCommandsText()
-
         DumbService.getInstance(project).smartInvokeLater {
             runWriteAction {
-                codeFragment.context = createContext(project, codeFragment.crateRoot as RsFile?, allCommandsText)
+                codeFragment.context = createContext(project, codeFragment.crateRoot as RsFile?, commands)
             }
         }
     }
 
     fun getAllCommandsText(): String {
-        val topLevelElementsText = topLevelElements.values.joinToString("\n")
-        return topLevelElementsText + "\n" + allCommandsText
+        return commands.joinToString("\n")
     }
 
     companion object {
-        fun createContext(project: Project, originalCrateRoot: RsFile?, allCommandsText: String = ""): RsBlock {
-            val rsFile = RsPsiFactory(project).createFile("fn main() { $allCommandsText }")
+        fun createContext(project: Project, originalCrateRoot: RsFile?, commands: List<String> = listOf("")): RsBlock {
+            // command may contain functions/structs with same names as in previous commands
+            // therefore we should put such commands in separate scope
+            // we do this like so:
+            // ```
+            // command1;
+            // {
+            //     command2;
+            //     {
+            //         command3;
+            //     }
+            // }
+            // And `RsBlock` surrounding `command3` will become context of codeFragment
+            // ```
+            val functionBody = commands.joinToString("\n{\n") + "\n}".repeat(commands.size - 1)
+            val rsFile = RsPsiFactory(project).createFile("fn main() { $functionBody }")
 
             val crateRoot = originalCrateRoot ?: findAnyCrateRoot(project)
             crateRoot?.let { rsFile.originalFile = crateRoot }
 
-            return rsFile.descendantOfTypeStrict()!!
+            var block: RsBlock = rsFile.childOfType<RsFunction>()!!.block!!
+            repeat(commands.size - 1) {
+                val blockExpr = block.childrenOfType<RsElement>().last() as RsBlockExpr
+                block = blockExpr.block
+            }
+            return block
         }
 
         private fun findAnyCrateRoot(project: Project): RsFile? {
@@ -57,15 +76,14 @@ class RsConsoleCodeFragmentContext {
 }
 
 class RsConsoleOneCommandContext(codeFragment: RsReplCodeFragment) {
-    val topLevelElements: MutableMap<String, String> = mutableMapOf()
-    val statementsText: String
+    val command: String
+    val itemsNames: List<String>
 
     init {
-        for (namedElement in codeFragment.namedElements) {
-            val name = namedElement.name ?: continue
-            topLevelElements[name] = namedElement.text
-        }
+        val elements = codeFragment.expandedStmtsAndTailExpr.first
+        command = elements.joinToString("\n") { it.text }
 
-        statementsText = codeFragment.stmts.joinToString("\n") { it.text } + "\n"
+        itemsNames = elements.filterIsInstance<RsNamedElement>()
+            .mapNotNull { it.name }
     }
 }

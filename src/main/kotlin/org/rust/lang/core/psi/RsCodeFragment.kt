@@ -16,6 +16,7 @@ import com.intellij.psi.tree.IElementType
 import com.intellij.testFramework.LightVirtualFile
 import org.rust.lang.RsFileType
 import org.rust.lang.RsLanguage
+import org.rust.lang.core.macros.RsExpandedElement
 import org.rust.lang.core.parser.RustParserUtil.PathParsingMode
 import org.rust.lang.core.parser.RustParserUtil.PathParsingMode.*
 import org.rust.lang.core.psi.ext.*
@@ -158,8 +159,24 @@ class RsPathCodeFragment(
 class RsReplCodeFragment(fileViewProvider: FileViewProvider, override var context: RsElement)
     : RsCodeFragment(fileViewProvider, RsCodeFragmentElementType.REPL, context, false),
       RsInferenceContextOwner, RsItemsOwner {
-    val stmts: List<RsStmt> get() = childrenOfType()
-    val tailExpr: RsExpr?
-        get() = children.findLast { it is RsExpr || it !is PsiWhiteSpace }?.let { it as? RsExpr }
-    val namedElements: List<RsNamedElement> get() = childrenOfType()
+
+    val expandedStmtsAndTailExpr: Pair<List<RsExpandedElement>, RsExpr?>
+        get() {
+            val expandedElements = childrenOfType<RsExpandedElement>()
+            val tailExpr = expandedElements.lastOrNull()?.let { it as? RsExpr }
+            val stmts = when (tailExpr) {
+                null -> expandedElements
+                else -> expandedElements.subList(0, expandedElements.size - 1)
+            }
+            return stmts to tailExpr
+        }
+
+    // for structure view
+    // if multiple elements have same name, then we keep only last among them
+    val namedElementsUnique: List<RsNamedElement>
+        get() = childrenOfType<RsNamedElement>()
+            .filter { it.name != null }
+            .groupBy { it.name!! }
+            .values
+            .map { it.last() }
 }
